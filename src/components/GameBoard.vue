@@ -8,6 +8,10 @@
     </div>
     
     <div class="game-area">
+      <div class="hint-button" @click="showHint">
+        提示 {{ freeHintUsed ? '(看广告)' : '(免费)' }}
+      </div>
+      
       <div class="game-board">
         <div v-if="!scene.length" class="debug-info">
           场景为空，请检查控制台日志
@@ -20,7 +24,8 @@
           :class="{
             'covered': card.isCover,
             'in-queue': card.inQueue,
-            'removed': card.status === 2
+            'removed': card.status === 2,
+            'hint': hintCards.includes(index)
           }"
           :style="{
             left: `${card.x}px`,
@@ -275,22 +280,20 @@ const clickSymbol = async (idx: number) => {
 
   steps.value++
   
-  // 保存原始位置用于可能的返回
+  // 保原始位置用于可能的返回
   symbol.originalX = symbol.x
   symbol.originalY = symbol.y
   
-  // 计算队列位置
-  const boardRect = document.querySelector('.game-board').getBoundingClientRect()
-  const queueX = 20 + (queue.value.length * 85)
-  const queueY = boardRect.height + 10
+  // 1. 更新卡片状态和位置 - 这部分是必须
+  symbol.status = 1  // 1表示在队列中
+  symbol.inQueue = true  // 标记卡片在队列中
   
-  // 更新卡片状态和位置
-  symbol.status = 1 // 1表示在队列中
-  symbol.inQueue = true
-  symbol.x = queueX
-  symbol.y = queueY
+  // 2. 计算队列位置
+  const position = calculateQueuePosition(queue.value.length)
+  symbol.x = position.x
+  symbol.y = position.y
   
-  // 添加到队列
+  // 4. 添加到队列
   queue.value.push(symbol)
   
   // 检查三消
@@ -438,6 +441,102 @@ const checkGameAreaOverlap = () => {
     console.log(`卡片 ${current.id}(${current.icon}) 最终覆盖状态:`, current.isCover)
   }
 }
+
+// 添加提示相关状态
+const freeHintUsed = ref(false) // 是否已使用免费提示
+const hintCards = ref<number[]>([]) // 存储可提示的卡片索引
+
+// 检查可消除的卡片组合
+const findHintCards = () => {
+  console.log('开始查找可消除卡片组合')
+  // 获取当前可点击的卡片（未消除、不在队列、未被覆盖）
+  const availableCards = scene.value.filter((card, index) => 
+    card.status === 0 && !card.inQueue && !card.isCover
+  )
+  
+  // 按图案分组
+  const iconGroups = new Map()
+  availableCards.forEach((card, index) => {
+    const sceneIndex = scene.value.findIndex(c => c.id === card.id)
+    if (!iconGroups.has(card.icon)) {
+      iconGroups.set(card.icon, [])
+    }
+    iconGroups.get(card.icon).push(sceneIndex)
+  })
+  
+  // 查找数量>=3的组合
+  for (const [icon, indices] of iconGroups.entries()) {
+    if (indices.length >= 3) {
+      console.log(`找到可消除组合: ${icon}, 位置:`, indices.slice(0, 3))
+      return indices.slice(0, 3)
+    }
+  }
+  
+  console.log('未找到可消除组合')
+  return []
+}
+
+// 显示广告
+const showAd = () => {
+  return new Promise((resolve) => {
+    // TODO: 接入实际的广告SDK
+    console.log('显示广告')
+    // 模拟广告播放
+    setTimeout(() => {
+      console.log('广告播放完成')
+      resolve(true)
+    }, 1000)
+  })
+}
+
+// 提示功能
+const showHint = async () => {
+  if (!freeHintUsed.value) {
+    // 第一次使用，免费
+    console.log('使用免费提示')
+    freeHintUsed.value = true
+  } else {
+    // 需要看广告
+    const confirmed = confirm('需要观看广告获得提示机会，是否继续？')
+    if (!confirmed) return
+    
+    const adResult = await showAd()
+    if (!adResult) {
+      alert('广告播放失败，请重试')
+      return
+    }
+  }
+  
+  // 查找可消除组合
+  const hintIndices = findHintCards()
+  if (hintIndices.length > 0) {
+    // 高亮显示
+    hintCards.value = hintIndices
+    
+    // 3秒后取消高亮
+    setTimeout(() => {
+      hintCards.value = []
+    }, 3000)
+  } else {
+    alert('当前没有可消除的卡片组合')
+  }
+}
+
+// 修改队列位置计算逻辑
+const calculateQueuePosition = (queueLength: number) => {
+  const queueAreaEl = document.querySelector('.queue-area')
+  const boardRect = document.querySelector('.game-board').getBoundingClientRect()
+  
+  // 调整卡片在队列中的位置计算
+  const cardWidth = 100 // 与CSS中的宽度对应
+  const cardGap = 30 // 卡片间距
+  const queuePadding = 30 // 与CSS中的padding对应
+  
+  const queueX = queuePadding + (queueLength * (cardWidth + cardGap))
+  const queueY = boardRect.height + 20
+  
+  return { x: queueX, y: queueY }
+}
 </script>
 
 <style scoped>
@@ -467,13 +566,14 @@ const checkGameAreaOverlap = () => {
 
 .queue-area {
   width: 800px;
-  height: 100px;
+  height: 120px;
   background: #f5f5f5;
   border: 2px solid #ddd;
   border-radius: 8px;
   padding: 10px;
   position: relative;
   z-index: 999;
+  margin-top: 20px;
 }
 
 .card {
@@ -496,8 +596,10 @@ const checkGameAreaOverlap = () => {
 }
 
 .card.in-queue {
-  border-color: #4CAF50;
-  box-shadow: 0 4px 8px rgba(76,175,80,0.3);
+  width: 100px;
+  height: 100px;
+  margin: 0 10px;
+  transition: all 0.3s ease;
 }
 
 .card.removed {
@@ -507,9 +609,10 @@ const checkGameAreaOverlap = () => {
 
 .queue-container {
   display: flex;
-  gap: 10px;
+  gap: 20px;
   height: 100%;
   align-items: center;
+  padding: 0 30px;
 }
 
 .queue-card {
@@ -524,8 +627,8 @@ const checkGameAreaOverlap = () => {
 }
 
 .card-icon {
-  width: 60%;
-  height: 60%;
+  width: 70%;
+  height: 70%;
   object-fit: contain;
 }
 
@@ -588,5 +691,38 @@ button:hover {
 .game-complete button {
   margin-top: 20px;
   padding: 10px 20px;
+}
+
+.hint-button {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  padding: 12px 24px;
+  background: #4CAF50;
+  color: white;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 18px;
+  font-weight: bold;
+  z-index: 1001;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.hint-button:hover {
+  background: #45a049;
+  transform: scale(1.05);
+  transition: all 0.3s ease;
+}
+
+.card.hint {
+  box-shadow: 0 0 15px #4CAF50;
+  border: 2px solid #4CAF50;
+  animation: hint-pulse 1s infinite;
+}
+
+@keyframes hint-pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+  100% { transform: scale(1); }
 }
 </style>
